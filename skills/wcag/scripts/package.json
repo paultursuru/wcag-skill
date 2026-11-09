@@ -1,0 +1,11 @@
+{
+  "name": "wcag-skill-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Dependencies of audit.mjs. Versions are exact: references/test-matrix.md describes this version of axe.",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "playwright": "1.62.0"
+  }
+}
