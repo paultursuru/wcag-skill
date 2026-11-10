@@ -6,7 +6,7 @@ Extracted on 2026-11-09 by scripts/build_references.py. Copyright © 2020-2024 W
 Copyright © 2023 W3C®. This software or document includes material copied from or derived from Web Content Accessibility Guidelines (WCAG) 2.2, https://www.w3.org/TR/WCAG22/.
 Terms in *italics* are defined in glossary.md.
 
-Find one with: `grep -n -i "^### contrast ratio" glossary.md`.
+Print one with: `python3 scripts/sc.py "contrast ratio"`.
 
 ### abbreviation
 

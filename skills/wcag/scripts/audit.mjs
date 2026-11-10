@@ -2,9 +2,7 @@
 // What a tool can check on a page, in every state and at every size. Zero
 // findings does not mean conformant: see references/test-matrix.md for the rest.
 //
-//   node audit.mjs URL [--state name=selector[&&selector]]... [--viewport 1280x800]...
-//                      [--block regex] [--out dir]
-//
+// Options: --help.
 // A state is reached from a fresh load by clicking its selectors in order. A state
 // that needs mocked network or a login belongs in a Playwright spec instead. Run
 // npm install in this folder first. Exit code 1 means axe found a WCAG violation or
@@ -23,6 +21,18 @@ const INTERACTIVE = 'a[href], area[href], button, input:not([type=hidden]), sele
 const AXE_BLEND_MODES = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity'];
 const FOCUS_PROPS = ['outlineStyle', 'outlineWidth', 'outlineColor', 'boxShadow', 'backgroundColor', 'borderTopColor', 'borderTopWidth', 'color', 'textDecorationLine'];
 
+const USAGE = `node audit.mjs URL [--state name=selector[&&selector]]... [--viewport WxH]... [--block regex] [--out dir]
+  --state     reached from a fresh load by clicking the selectors in order. "initial" always runs.
+  --viewport  default 1280x800 and 390x844. Reflow (320 px) and 200% zoom always run.
+  --block     regex of request URLs to abort (analytics, error reporting endpoints).
+  --out       screenshot folder, default under the system temp folder.
+Exit code 1: axe found a WCAG violation, a rule crashed or the page stayed hidden.`;
+
+// Lines of the current state, held back so a state only prints what no earlier state printed.
+let buffer = null;
+const out = line => (buffer ? buffer.push(line) : console.log(line));
+const versions = {};
+
 function parseArgs(argv) {
   const opts = { url: null, states: [{ name: 'initial', clicks: [] }], viewports: [], out: null, block: null };
   for (let i = 0; i < argv.length; i++) {
@@ -36,9 +46,10 @@ function parseArgs(argv) {
       opts.viewports.push({ width, height });
     } else if (arg === '--out') opts.out = argv[++i];
     else if (arg === '--block') opts.block = new RegExp(argv[++i]);
+    else if (arg === '--help' || arg === '-h') { console.log(USAGE); process.exit(0); }
     else opts.url = arg;
   }
-  if (!opts.url) { console.error('usage: audit.mjs URL [--state name=selector]... [--viewport WxH]... [--block regex] [--out dir]'); process.exit(2); }
+  if (!opts.url) { console.error(USAGE); process.exit(2); }
   if (!opts.viewports.length) opts.viewports = [{ width: 1280, height: 800 }, { width: 390, height: 844 }];
   // Outside the audited project, so a run never adds files to its repository.
   opts.out ??= join(tmpdir(), 'wcag-audit', opts.url.replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9]+/g, '-'));
@@ -120,25 +131,30 @@ async function runAxe(state) {
     }
     groups.set(key, group);
   };
+  const notes = new Map();
   for (const viewport of opts.viewports) {
     const page = await open(state, viewport);
     const { hidden, total } = await page.evaluate(hiddenText);
     if (hidden * 2 > total) {
       failures.push('page hidden');
-      console.log(`  PAGE HIDDEN at ${sizeName(viewport)}: ${hidden} of ${total} text elements at opacity 0. Axe skips them, so its result says nothing about them. Did --block stop a script the page needs?`);
-    } else if (hidden) console.log(`  note: ${hidden} of ${total} text elements still at opacity 0 at ${sizeName(viewport)}. Axe did not check them.`);
+      out(`  PAGE HIDDEN at ${sizeName(viewport)}: ${hidden} of ${total} text elements at opacity 0. Axe skips them, so its result says nothing about them. Did --block stop a script the page needs?`);
+    } else if (hidden) out(`  note: ${hidden} of ${total} text elements still at opacity 0 at ${sizeName(viewport)}. Axe did not check them.`);
     const neutralised = await page.evaluate((known) => {
       const hits = [...document.querySelectorAll('*')].filter(el => !known.includes(getComputedStyle(el).mixBlendMode));
       const modes = [...new Set(hits.map(el => getComputedStyle(el).mixBlendMode))];
       hits.forEach(el => el.style.setProperty('mix-blend-mode', 'normal', 'important'));
       return { count: hits.length, modes };
     }, AXE_BLEND_MODES);
-    if (neutralised.count) console.log(`  note: ${neutralised.count} elements with mix-blend-mode ${neutralised.modes.join(', ')} set to normal at ${sizeName(viewport)}, or axe's contrast rule would crash`);
+    if (neutralised.count) {
+      const note = `  note: ${neutralised.count} elements with mix-blend-mode ${neutralised.modes.join(', ')} set to normal for this run. Left as is, axe's color-contrast rule crashes and reports nothing: say so in the report, the site's own axe tests are affected`;
+      notes.set(note, [...(notes.get(note) ?? []), sizeName(viewport)]);
+    }
     const results = await new AxeBuilder({ page }).withTags([...WCAG_TAGS, 'best-practice']).analyze();
+    versions.axe = results.testEngine.version;
     // A rule that crashes lands in "incomplete" and looks like nothing was found.
     for (const v of results.incomplete.filter(r => r.error)) {
       failures.push(`${v.id} (did not run)`);
-      console.log(`  AXE RULE DID NOT RUN: ${v.id}: ${v.error.message}`);
+      out(`  AXE RULE DID NOT RUN: ${v.id}: ${v.error.message}`);
     }
     results.incomplete = results.incomplete.filter(r => !r.error);
     for (const v of results.violations) {
@@ -152,12 +168,15 @@ async function runAxe(state) {
     await page.screenshot({ path: join(opts.out, `${state.name}-${sizeName(viewport)}.png`), fullPage: true });
     await page.context().close();
   }
-  if (!groups.size) console.log('  axe: nothing found');
+  const sized = sizes => (sizes.length < opts.viewports.length ? `  [${sizes.join(', ')}]` : '');
+  for (const [note, sizes] of notes) out(`${note}${sized(sizes)}`);
+  if (!groups.size) out('  axe: nothing found');
   for (const g of groups.values()) {
-    console.log(`  ${g.kind}: ${g.id}${g.sc ? ` (${g.sc})` : ''}: ${g.help}`);
     const all = [...g.nodes.entries()];
-    for (const [text, sizes] of all.slice(0, 10)) console.log(`      ${text}${sizes.length < opts.viewports.length ? `  [${sizes.join(', ')}]` : ''}`);
-    if (all.length > 10) console.log(`      ... and ${all.length - 10} more`);
+    const lines = [`  ${g.kind}: ${g.id}${g.sc ? ` (${g.sc})` : ''}: ${g.help}`];
+    for (const [text, sizes] of all.slice(0, 10)) lines.push(`      ${text}${sized(sizes)}`);
+    if (all.length > 10) lines.push(`      ... and ${all.length - 10} more`);
+    out(lines.join('\n'));
   }
 }
 
@@ -196,14 +215,14 @@ async function runLayout(state) {
     const plain = await page.evaluate(layoutProbe);
     const overflow = plain.scrollWidth > plain.width;
     // 1.4.4 asks for no loss of content or function: content reached by scrolling is not lost.
-    if (overflow && sc === '1.4.4') console.log(`  note 1.4.4: horizontal scroll at ${viewport.width} px (${plain.scrollWidth} wide). Allowed unless content or function is lost.`);
-    else if (overflow) console.log(`  suspect ${sc}: horizontal scroll at ${viewport.width} px (${plain.scrollWidth} wide): ${plain.beyond.join(', ')}`);
-    else if (plain.beyond.length) console.log(`  suspect ${sc}: text or control past the right edge at ${viewport.width} px: ${plain.beyond.join(', ')}`);
+    if (overflow && sc === '1.4.4') out(`  note 1.4.4: horizontal scroll at ${viewport.width} px (${plain.scrollWidth} wide). Allowed unless content or function is lost.`);
+    else if (overflow) out(`  suspect ${sc}: horizontal scroll at ${viewport.width} px (${plain.scrollWidth} wide): ${plain.beyond.join(', ')}`);
+    else if (plain.beyond.length) out(`  suspect ${sc}: text or control past the right edge at ${viewport.width} px: ${plain.beyond.join(', ')}`);
     await page.addStyleTag({ content: TEXT_SPACING });
     const spaced = await page.evaluate(layoutProbe);
     const newlyClipped = spaced.clipped.filter(c => !plain.clipped.includes(c));
-    if (!overflow && spaced.scrollWidth > spaced.width) console.log(`  suspect 1.4.12: horizontal scroll with text spacing at ${viewport.width} px: ${spaced.beyond.join(', ')}`);
-    if (newlyClipped.length) console.log(`  suspect 1.4.12: text clipped with text spacing at ${viewport.width} px: ${[...new Set(newlyClipped)].slice(0, 6).join(', ')}`);
+    if (!overflow && spaced.scrollWidth > spaced.width) out(`  suspect 1.4.12: horizontal scroll with text spacing at ${viewport.width} px: ${spaced.beyond.join(', ')}`);
+    if (newlyClipped.length) out(`  suspect 1.4.12: text clipped with text spacing at ${viewport.width} px: ${[...new Set(newlyClipped)].slice(0, 6).join(', ')}`);
     if (viewport.width === 320) await page.screenshot({ path: join(opts.out, `${state.name}-320-text-spacing.png`), fullPage: true });
     await page.context().close();
   }
@@ -217,7 +236,7 @@ async function runKeyboard(state) {
     const say = line => seen.set(line, [...(seen.get(line) ?? []), sizeName(viewport)]);
     await walkKeyboard(state, viewport, say, viewport === opts.viewports[0]);
   }
-  for (const [line, sizes] of seen) console.log(`${line}${sizes.length < opts.viewports.length ? `  [${sizes.join(', ')}]` : ''}`);
+  for (const [line, sizes] of seen) out(`${line}${sizes.length < opts.viewports.length ? `  [${sizes.join(', ')}]` : ''}`);
 }
 
 async function walkKeyboard(state, viewport, say, printOrder) {
@@ -285,10 +304,9 @@ async function walkKeyboard(state, viewport, say, printOrder) {
   }
   const name = o => `${o.tag}${o.id ? `#${o.id}` : o.cls ? `.${o.cls}` : ''}${o.role ? `[${o.role}]` : ''} "${o.text}"`;
   if (printOrder) {
-    console.log(`  Tab order at ${sizeName(viewport)} (2.4.3, read it: does it follow the meaning?), ${order.length} stops:`);
-    order.slice(0, 45).forEach((o, i) => console.log(`      ${i + 1}. ${name(o)}`));
-    if (order.length > 45) console.log(`      ... and ${order.length - 45} more`);
-  } else console.log(`  Tab order at ${sizeName(viewport)}: ${order.length} stops`);
+    const listed = order.slice(0, 45).map((o, i) => `${i + 1} ${name(o)}`).join(' | ');
+    out(`  Tab order at ${sizeName(viewport)} (2.4.3: does it follow the meaning?), ${order.length} stops: ${listed}${order.length > 45 ? ` | ... and ${order.length - 45} more` : ''}`);
+  } else out(`  Tab order at ${sizeName(viewport)}: ${order.length} stops`);
   if (trap) say(`  suspect 2.1.2: focus loops back without leaving, after ${name(trap)}`);
   const report = (criteria, reason, stops) => {
     const span = stops.length > 1 ? `${stops.length} stops (${stops[0].i} to ${stops.at(-1).i})` : `stop ${stops[0].i}`;
@@ -346,16 +364,29 @@ await warmUp.goto(opts.url, { waitUntil: 'load' }).catch(() => {});
 await warmUp.waitForTimeout(3000);
 await warmUp.context().close();
 
+const printed = new Map();
 for (const state of opts.states) {
   console.log(`\n=== State "${state.name}"${state.clicks.length ? ` (${state.clicks.join(' then ')})` : ''}`);
+  buffer = [];
   await runAxe(state);
   await runLayout(state);
   await runKeyboard(state);
   await runPictures(state);
+  const items = buffer;
+  buffer = null;
+  items.filter(item => !printed.has(item)).forEach(item => console.log(item));
+  // The first words of a line are enough to find it under the earlier state.
+  const short = item => item.trim().split('\n')[0].split(':').slice(0, 2).join(':').slice(0, 48);
+  const earlier = new Map();
+  for (const item of items.filter(i => printed.has(i))) earlier.set(printed.get(item), [...(earlier.get(printed.get(item)) ?? []), short(item)]);
+  for (const [name, labels] of earlier) console.log(`  Also here, exactly as under "${name}": ${labels.join('; ')}`);
+  for (const item of items) if (!printed.has(item)) printed.set(item, state.name);
 }
+versions.browser = `Chromium ${browser.version()}`;
 await browser.close();
 
 if (blocked.size) console.log(`\nStopped by --block, so not audited: ${[...blocked].join(', ')}`);
-console.log(`\nScreenshots in ${opts.out}: full page per size, 320 px with text spacing, forced colours, greyscale. Look at them.`);
+console.log(`\n${versions.browser}, axe-core ${versions.axe}.`);
+console.log(`Screenshots in ${opts.out}, named <state>-<what>.png: -forced-colors and -grayscale are worth opening (control gone, state lost without colour), -320-text-spacing and the full pages per size only to settle a finding.`);
 console.log(`Axe WCAG violations or crashed rules: ${failures.length ? [...new Set(failures)].join(', ') : 'none'}. This is not a conformance result.`);
 process.exit(failures.length ? 1 : 0);
