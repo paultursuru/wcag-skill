@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: w3c-bad-broken-pages
+expected_outcome: |
+  The report finds the defects the W3C lists for these pages, including those no automated tool flags, ties each to the right criterion, and says what was not tested.
