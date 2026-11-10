@@ -4,11 +4,11 @@ An agent skill that helps a coding agent audit and fix web accessibility against
 
 It bundles:
 
-- **The official text** of the WCAG 2.2 Recommendation: criteria, glossary and conformance rules, so the agent cites the criterion instead of its memory.
+- **The official text** of the WCAG 2.2 Recommendation: criteria, glossary and conformance rules, so the agent cites the criterion instead of its memory. `sc.py` prints one criterion or term at a time.
 - **A test matrix** for the 55 A and AA criteria: what axe covers, what the script covers, what needs review, what needs a person.
 - **`audit.mjs`**: axe per state and screen size, a keyboard walk with Tab at every size, reflow at 320 px, text spacing, forced-colours and greyscale screenshots.
 - **`contrast.py`**: exact ratios, never rounded, opacity compositing, and the smallest colour change that passes on every background.
-- **A list of pitfalls** met on real pages, and a report template with a mandatory coverage section.
+- **A list of pitfalls** met on real pages (`references/pitfalls.md`), and a report template with a mandatory coverage section.
 
 ## Why another one
 
@@ -37,6 +37,7 @@ Ask in plain words: "audit the pricing page for accessibility", "this text looks
 ```bash
 node scripts/audit.mjs http://localhost:3000/pricing --state 'dark=#theme-toggle'
 python3 scripts/contrast.py '#8d5ba3' '#f6f0d4' '#fffaf0' --fix 4.5
+python3 scripts/sc.py 1.4.3 "large scale"
 ```
 
 ## Benchmark
@@ -59,6 +60,16 @@ So the script alone misses about half of what is known to be broken: page titles
 - **Chromium only.** No Safari, no Firefox, no real screen reader. The skill asks a person for those.
 - **Pages behind a login, or states that need mocked data,** go in your own Playwright spec with `AxeBuilder`. The script handles public URLs and states reached by clicks.
 - **It does not replace testing with disabled users,** and it does not produce a legal conformance statement.
+
+## Updating
+
+The references are regenerated from the Recommendation and the Editor's Draft, which are downloaded data. Put them in a separate folder and run with `-I`:
+
+```bash
+python3 -I skills/wcag/scripts/build_references.py recommendation.html draft.html skills/wcag/references
+```
+
+`test-matrix.md` and the number of criteria axe covers are written by hand: review them if the specification or the axe version changes.
 
 ## License
 

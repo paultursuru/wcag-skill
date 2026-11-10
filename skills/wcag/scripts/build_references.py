@@ -217,7 +217,7 @@ def header(title, source, compared):
 def write_all(source, compared, out):
     later = {s['num']: s for s in compared['sc']}
     lines = header('WCAG 2.2: success criteria', source, compared)
-    lines += ['Find one with: `grep -n "^#### 1.4.3 " success-criteria.md`, then read about 25 lines from there.', '']
+    lines += ['Print one with: `python3 scripts/sc.py 1.4.3`.', '']
     lines += ["## Differences with the Editor's Draft", '',
               "These do not change the requirements in force. A `-` line is the text below, a `+` line is the draft.", '']
     differing = [s for s in source['sc'] if s['md'] != later[s['num']]['md']]
@@ -240,7 +240,7 @@ def write_all(source, compared, out):
     (out / 'success-criteria.md').write_text('\n'.join(lines), encoding='utf-8')
 
     lines = header('WCAG 2.2: glossary', source, compared)
-    lines += ['Find one with: `grep -n -i "^### contrast ratio" glossary.md`.', '']
+    lines += ['Print one with: `python3 scripts/sc.py "contrast ratio"`.', '']
     for term, body in sorted(source['glossary'].items(), key=lambda kv: kv[0].lower()):
         lines += [f'### {term}', ''] + (body or []) + ['']
     (out / 'glossary.md').write_text('\n'.join(lines), encoding='utf-8')
